@@ -28,15 +28,18 @@ import consulo.application.AllIcons;
 import consulo.application.ApplicationManager;
 import consulo.dataContext.DataContext;
 import consulo.dataContext.DataManager;
-import consulo.dataContext.DataProvider;
+import consulo.dataContext.DataSink;
+import consulo.dataContext.UiDataProvider;
 import consulo.disposer.Disposable;
 import consulo.disposer.Disposer;
 import consulo.execution.event.RunManagerListener;
 import consulo.execution.event.RunManagerListenerEvent;
 import consulo.fileChooser.FileChooserDescriptor;
 import consulo.fileChooser.IdeaFileChooser;
+import consulo.language.editor.LangDataKeys;
 import consulo.language.editor.PlatformDataKeys;
-import consulo.navigation.OpenFileDescriptor;
+import consulo.language.psi.PsiElement;
+import consulo.navigation.Navigatable;
 import consulo.navigation.OpenFileDescriptorFactory;
 import consulo.platform.base.icon.PlatformIconGroup;
 import consulo.project.Project;
@@ -58,7 +61,6 @@ import consulo.ui.ex.keymap.KeymapManager;
 import consulo.ui.ex.keymap.event.KeymapManagerListener;
 import consulo.util.collection.ArrayUtil;
 import consulo.util.collection.ContainerUtil;
-import consulo.util.dataholder.Key;
 import consulo.virtualFileSystem.VirtualFile;
 import consulo.virtualFileSystem.util.VirtualFileUtil;
 import consulo.xml.language.XmlFileType;
@@ -66,7 +68,6 @@ import consulo.xml.dom.DomEventListener;
 import consulo.xml.dom.DomManager;
 import consulo.xml.dom.DomEvent;
 import jakarta.annotation.Nullable;
-import org.jetbrains.annotations.NonNls;
 
 import javax.swing.*;
 import javax.swing.tree.DefaultMutableTreeNode;
@@ -79,9 +80,12 @@ import java.awt.event.MouseEvent;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.function.Function;
 
-public class AntExplorer extends SimpleToolWindowPanel implements DataProvider, Disposable {
+public class AntExplorer extends SimpleToolWindowPanel implements UiDataProvider, Disposable {
   private Project myProject;
   private AntExplorerTreeBuilder myBuilder;
   private Tree myTree;
@@ -429,73 +433,80 @@ public class AntExplorer extends SimpleToolWindowPanel implements DataProvider, 
     popupMenu.getComponent().show(comp, x, y);
   }
 
-  @Nullable
-  public Object getData(@NonNls Key<?> dataId) {
-    if (PlatformDataKeys.NAVIGATABLE == dataId) {
-      final AntBuildFile buildFile = getCurrentBuildFile();
-      if (buildFile == null) {
-        return null;
-      }
-      final VirtualFile file = buildFile.getVirtualFile();
-      if (file == null) {
-        return null;
-      }
-      final TreePath treePath = myTree.getLeadSelectionPath();
-      if (treePath == null) {
-        return null;
-      }
-      final DefaultMutableTreeNode node = (DefaultMutableTreeNode)treePath.getLastPathComponent();
-      if (node == null) {
-        return null;
-      }
-      if (node.getUserObject() instanceof AntTargetNodeDescriptor) {
-        final AntTargetNodeDescriptor targetNodeDescriptor = (AntTargetNodeDescriptor)node.getUserObject();
-        final AntBuildTargetBase buildTarget = targetNodeDescriptor.getTarget();
-        final OpenFileDescriptor descriptor = buildTarget.getOpenFileDescriptor();
-        if (descriptor != null) {
-          final VirtualFile descriptorFile = descriptor.getFile();
-          if (descriptorFile.isValid()) {
-            return descriptor;
-          }
+  @Override
+  public void uiDataSnapshot(DataSink sink) {
+    super.uiDataSnapshot(sink);
+    sink.set(PlatformDataKeys.HELP_ID, HelpID.ANT);
+    sink.set(PlatformDataKeys.TREE_EXPANDER, myProject != null ? myTreeExpander : null);
+
+    final Tree tree = myTree;
+    if (tree == null) {
+      return;
+    }
+    final TreePath[] paths = tree.getSelectionPaths();
+    final TreePath leadPath = tree.getLeadSelectionPath();
+    final AntBuildFile currentBuildFile = getCurrentBuildFile();
+    sink.lazy(PlatformDataKeys.VIRTUAL_FILE_ARRAY, () -> {
+      final List<VirtualFile> virtualFiles = collectAntFiles(buildFile -> {
+        final VirtualFile virtualFile = buildFile.getVirtualFile();
+        if (virtualFile != null && virtualFile.isValid()) {
+          return virtualFile;
         }
-      }
-      if (file.isValid()) {
-        return OpenFileDescriptorFactory.getInstance(myProject).builder(file).build();
-      }
-    }
-    else if (PlatformDataKeys.TREE_EXPANDER == dataId) {
-      return myProject != null ? myTreeExpander : null;
-    }
-    else if (PlatformDataKeys.VIRTUAL_FILE_ARRAY == dataId) {
-      final TreePath[] paths = myTree.getSelectionPaths();
-      if (paths == null) {
         return null;
-      }
-      final ArrayList<VirtualFile> result = new ArrayList<VirtualFile>();
-      for (final TreePath path : paths) {
-        for (DefaultMutableTreeNode node = (DefaultMutableTreeNode)path.getLastPathComponent();
-             node != null;
-             node = (DefaultMutableTreeNode)node.getParent()) {
-          final Object userObject = node.getUserObject();
-          if (!(userObject instanceof AntBuildFileNodeDescriptor)) {
-            continue;
-          }
-          final AntBuildFile buildFile = ((AntBuildFileNodeDescriptor)userObject).getBuildFile();
-          if (buildFile != null) {
-            final VirtualFile virtualFile = buildFile.getVirtualFile();
-            if (virtualFile != null && virtualFile.isValid()) {
-              result.add(virtualFile);
+      }, paths);
+      return virtualFiles == null ? null : virtualFiles.toArray(VirtualFile.EMPTY_ARRAY);
+    });
+    sink.lazy(LangDataKeys.PSI_ELEMENT_ARRAY, () -> {
+      final List<PsiElement> elements = collectAntFiles(AntBuildFile::getAntFile, paths);
+      return elements == null ? null : elements.toArray(PsiElement.EMPTY_ARRAY);
+    });
+    sink.lazy(PlatformDataKeys.NAVIGATABLE, () -> {
+      if (leadPath != null) {
+        final DefaultMutableTreeNode node = (DefaultMutableTreeNode)leadPath.getLastPathComponent();
+        if (node != null) {
+          if (node.getUserObject() instanceof AntTargetNodeDescriptor targetNodeDescriptor) {
+            final Navigatable navigatable = targetNodeDescriptor.getTarget().getOpenFileDescriptor();
+            if (navigatable != null && navigatable.canNavigate()) {
+              return navigatable;
             }
           }
-          break;
         }
       }
-      if (result.size() == 0) {
-        return null;
+      if (currentBuildFile != null && myProject != null && !myProject.isDisposed()) {
+        final VirtualFile file = currentBuildFile.getVirtualFile();
+        if (file != null && file.isValid()) {
+          return OpenFileDescriptorFactory.getInstance(myProject).builder(file).build();
+        }
       }
-      return VirtualFileUtil.toVirtualFileArray(result);
+      return null;
+    });
+  }
+
+  private static <T> List<T> collectAntFiles(final Function<? super AntBuildFile, ? extends T> function, final TreePath[] paths) {
+    if (paths == null || paths.length == 0) {
+      return null;
     }
-    return super.getData(dataId);
+    final Set<AntBuildFile> antFiles = new LinkedHashSet<>();
+    for (final TreePath path : paths) {
+      for (DefaultMutableTreeNode node = (DefaultMutableTreeNode)path.getLastPathComponent();
+           node != null;
+           node = (DefaultMutableTreeNode)node.getParent()) {
+        final Object userObject = node.getUserObject();
+        if (!(userObject instanceof AntBuildFileNodeDescriptor)) {
+          continue;
+        }
+        final AntBuildFile buildFile = ((AntBuildFileNodeDescriptor)userObject).getBuildFile();
+        if (buildFile != null) {
+          antFiles.add(buildFile);
+        }
+        break;
+      }
+    }
+    final List<T> result = new ArrayList<>();
+    for (final AntBuildFile buildFile : antFiles) {
+      ContainerUtil.addIfNotNull(result, function.apply(buildFile));
+    }
+    return result.isEmpty() ? null : result;
   }
 
   public static FileChooserDescriptor createXmlDescriptor() {
