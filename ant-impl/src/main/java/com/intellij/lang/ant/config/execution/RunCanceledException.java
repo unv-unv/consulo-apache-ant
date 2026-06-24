@@ -15,18 +15,20 @@
  */
 package com.intellij.lang.ant.config.execution;
 
+import consulo.localize.LocalizeValue;
+import consulo.ui.annotation.RequiredUIAccess;
 import consulo.ui.ex.awt.Messages;
 import consulo.execution.CantRunException;
 import consulo.project.Project;
 
-public class RunCanceledException extends CantRunException
-{
-  public RunCanceledException(String message) {
-    super(message);
-  }
+public class RunCanceledException extends CantRunException {
+    public RunCanceledException(String message) {
+        super(message);
+    }
 
-  public void showMessage(Project project, String title) {
-    Messages.showInfoMessage(project, getMessage(), title);
-  }
+    @RequiredUIAccess
+    public void showMessage(Project project, LocalizeValue title) {
+        Messages.showInfoMessage(project, getMessage(), title.get());
+    }
 }
 
