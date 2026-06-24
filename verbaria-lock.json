@@ -1,0 +1,22 @@
+{
+  "lockVersion" : 1,
+  "server" : "https://i.verbaria.org/",
+  "project" : "consulo-apache-ant",
+  "projectVersion" : "master",
+  "generatedAt" : "2026-06-24T15:04:25.754714648Z",
+  "documents" : {
+    "consulo.apache.ant.impl.ApacheAntImplLocalize" : {
+      "source" : {
+        "revision" : 1
+      },
+      "translations" : {
+        "en-US" : {
+          "sig" : "1e4318fc84c42bf80de7007cc499e9a4",
+          "state" : "Approved",
+          "total" : 189,
+          "translators" : [ "Valery Semenchuk <vistall.valeriy@gmail.com>" ]
+        }
+      }
+    }
+  }
+}
